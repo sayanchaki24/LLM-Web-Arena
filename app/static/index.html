@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BestResponse - Multi-LLM Web Aggregator & AI Judge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Marked for markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Highlight.js for code syntax highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Navigation Bar -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="logo-icon">⚡</div>
+        <div>
+          <h1>BestResponse <span class="badge-tag">No-API Multi-LLM</span></h1>
+          <p class="subtitle">Concurrent Web Automation • ChatGPT • Claude • Gemini • GLM (chat.z.ai) • AI Judge</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-login-window" class="btn btn-secondary" title="Open browser window to log in to your accounts">
+          <span class="icon">🔑</span> Manage Web Logins
+        </button>
+        <button id="btn-toggle-history" class="btn btn-secondary">
+          <span class="icon">📜</span> Past Battles
+        </button>
+      </div>
+    </header>
+
+    <!-- Account Status Bar -->
+    <section class="status-bar-container">
+      <div class="status-cards-grid">
+        <!-- ChatGPT Card -->
+        <div class="status-card" id="card-chatgpt">
+          <div class="status-card-header">
+            <span class="provider-pill pill-chatgpt">ChatGPT</span>
+            <span class="status-indicator status-unknown" id="status-badge-chatgpt">Checking...</span>
+          </div>
+          <div class="status-card-body">
+            <span class="account-label" id="status-text-chatgpt">Connecting to web session...</span>
+          </div>
+        </div>
+
+        <!-- Claude Card -->
+        <div class="status-card" id="card-claude">
+          <div class="status-card-header">
+            <span class="provider-pill pill-claude">Claude</span>
+            <span class="status-indicator status-unknown" id="status-badge-claude">Checking...</span>
+          </div>
+          <div class="status-card-body">
+            <span class="account-label" id="status-text-claude">Connecting to web session...</span>
+          </div>
+        </div>
+
+        <!-- Gemini Card -->
+        <div class="status-card" id="card-gemini">
+          <div class="status-card-header">
+            <span class="provider-pill pill-gemini">Gemini</span>
+            <span class="status-indicator status-unknown" id="status-badge-gemini">Checking...</span>
+          </div>
+          <div class="status-card-body">
+            <span class="account-label" id="status-text-gemini">Connecting to web session...</span>
+          </div>
+        </div>
+
+        <!-- GLM Card -->
+        <div class="status-card" id="card-glm">
+          <div class="status-card-header">
+            <span class="provider-pill pill-glm">GLM (z.ai)</span>
+            <span class="status-indicator status-unknown" id="status-badge-glm">Checking...</span>
+          </div>
+          <div class="status-card-body">
+            <span class="account-label" id="status-text-glm">Connecting to web session...</span>
+          </div>
+        </div>
+      </div>
+      <div class="status-actions">
+        <button id="btn-refresh-status" class="btn-text" title="Re-check login status">↻ Refresh Status</button>
+      </div>
+    </section>
+
+    <!-- Main Content Area -->
+    <main class="main-container">
+      <!-- Query Composer -->
+      <section class="composer-card">
+        <div class="composer-header">
+          <h2>Inquire Across Multiple Models</h2>
+          <span class="help-text">Type your prompt once. It will be sent to your active accounts simultaneously.</span>
+        </div>
+
+        <div class="textarea-wrapper">
+          <textarea id="prompt-input" placeholder="Ask anything (e.g., 'Explain quantum computing to a high schooler with analogies', 'Write a Python script to optimize PNG files', 'Compare Postgres vs ClickHouse for analytics')..." rows="4"></textarea>
+        </div>
+
+        <div class="composer-controls">
+          <div class="models-selector">
+            <span class="control-label">Target Models:</span>
+            <label class="checkbox-pill">
+              <input type="checkbox" id="check-chatgpt" value="ChatGPT" checked>
+              <span>ChatGPT</span>
+            </label>
+            <label class="checkbox-pill">
+              <input type="checkbox" id="check-claude" value="Claude" checked>
+              <span>Claude</span>
+            </label>
+            <label class="checkbox-pill">
+              <input type="checkbox" id="check-gemini" value="Gemini" checked>
+              <span>Gemini</span>
+            </label>
+            <label class="checkbox-pill">
+              <input type="checkbox" id="check-glm" value="GLM" checked>
+              <span>GLM (z.ai)</span>
+            </label>
+          </div>
+
+          <div class="judge-selector">
+            <span class="control-label">AI Judge:</span>
+            <select id="judge-select">
+              <option value="Gemini" selected>Gemini (AI Judge)</option>
+              <option value="ChatGPT">ChatGPT (AI Judge)</option>
+              <option value="Claude">Claude (AI Judge)</option>
+              <option value="GLM">GLM (AI Judge)</option>
+            </select>
+          </div>
+
+          <div class="options-toggle">
+            <label class="toggle-label" title="Keep browser visible to easily monitor generation or solve Cloudflare challenges">
+              <input type="checkbox" id="check-visible-browser" checked>
+              <span>Show Browser Window</span>
+            </label>
+          </div>
+
+          <div class="submit-action">
+            <button id="btn-submit" class="btn btn-primary">
+              <span class="btn-text-content">🚀 Compare & Pick Best</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live Progress Bar & Log -->
+      <section id="progress-section" class="progress-section hidden">
+        <div class="progress-header">
+          <div class="spinner"></div>
+          <span id="progress-summary">Dispatching queries to models...</span>
+        </div>
+        <div id="progress-timeline" class="progress-timeline"></div>
+      </section>
+
+      <!-- Winner Verdict Hero -->
+      <section id="verdict-section" class="verdict-section hidden">
+        <div class="verdict-card">
+          <div class="verdict-badge">🏆 OFFICIAL AI JUDGE VERDICT</div>
+          <div class="verdict-content">
+            <h2 id="verdict-winner-title">Winner: Model Name</h2>
+            <p id="verdict-reason" class="verdict-reason">Reasoning explanation...</p>
+            <div class="verdict-actions">
+              <button id="btn-copy-best" class="btn btn-primary-small">📋 Copy Best Answer</button>
+              <button id="btn-toggle-judge-details" class="btn btn-secondary-small">🔍 Show Detailed AI Evaluation</button>
+            </div>
+            <div id="judge-details-collapse" class="judge-details hidden">
+              <div id="judge-markdown-body" class="markdown-body"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Side-by-Side Comparison Section -->
+      <section id="results-section" class="results-section hidden">
+        <div class="results-header">
+          <h3>Candidate Responses Side-by-Side</h3>
+          <span class="results-subtitle">Evaluated on accuracy, depth, structure, and actionability</span>
+        </div>
+        <div id="responses-grid" class="responses-grid">
+          <!-- Dynamically populated model cards -->
+        </div>
+      </section>
+    </main>
+
+    <!-- History Slide-over Drawer -->
+    <div id="history-drawer" class="history-drawer hidden">
+      <div class="drawer-header">
+        <h3>Previous Inquiries & Battles</h3>
+        <button id="btn-close-history" class="btn-close">&times;</button>
+      </div>
+      <div id="history-list" class="history-list">
+        <!-- Dynamically populated past queries -->
+      </div>
+    </div>
+    <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+
+    <!-- Login Helper Modal -->
+    <div id="login-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Browser Account Login Manager</h3>
+          <button id="btn-close-modal" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>
+            BestResponse directly leverages your personal web sessions on <strong>ChatGPT</strong>, <strong>Claude</strong>, <strong>Gemini</strong>, and <strong>GLM</strong> without needing any API keys!
+          </p>
+          <div class="instruction-steps">
+            <div class="step-item">
+              <div class="step-num">1</div>
+              <div>Click <strong>"Launch Login Browser"</strong> below. A dedicated browser window will open with tabs for ChatGPT, Claude, Gemini, and GLM (chat.z.ai).</div>
+            </div>
+            <div class="step-item">
+              <div class="step-num">2</div>
+              <div>Log into your accounts (Google, Apple, or email) in that window as you normally do. Any 2FA or captcha is easily completed by you.</div>
+            </div>
+            <div class="step-item">
+              <div class="step-num">3</div>
+              <div>Once logged in, click <strong>"Done & Save Session"</strong>. Your cookies stay securely saved on your computer in <code>./browser_profile</code> for future queries!</div>
+            </div>
+          </div>
+          <div class="modal-buttons">
+            <button id="btn-launch-login" class="btn btn-primary">🚀 Launch Login Browser</button>
+            <button id="btn-save-session" class="btn btn-secondary">💾 Done & Save Session</button>
+          </div>
+          <div id="login-modal-status" class="login-modal-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
