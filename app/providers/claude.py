@@ -34,6 +34,14 @@ class ClaudeProvider(BaseProvider):
             await asyncio.sleep(2)
             await self._dismiss_popups(page)
 
+            # Wait briefly if Cloudflare is resolving
+            for _ in range(8):
+                title = await page.title()
+                if "just a moment" in title.lower() or "security" in title.lower():
+                    await asyncio.sleep(1)
+                else:
+                    break
+
             # Check if login / email field is displayed
             login_field = page.locator('input[type="email"], button:has-text("Continue with Google"), a[href*="login"]').first
             is_login_visible = False
@@ -43,10 +51,10 @@ class ClaudeProvider(BaseProvider):
                 pass
 
             # Check if prompt box exists
-            prompt_box = page.locator('div.ProseMirror, div[contenteditable="true"]').first
+            prompt_box = page.locator('div.ProseMirror, fieldset div[contenteditable="true"], div[contenteditable="true"]').first
             is_prompt_visible = False
             try:
-                is_prompt_visible = await prompt_box.is_visible(timeout=2000)
+                is_prompt_visible = await prompt_box.is_visible(timeout=6000)
             except Exception:
                 pass
 
@@ -68,26 +76,41 @@ class ClaudeProvider(BaseProvider):
         await asyncio.sleep(2)
         await self._dismiss_popups(page)
 
-        # Locate prompt textarea
+        # Wait if Cloudflare Turnstile challenge is active
+        for _ in range(12):
+            title = await page.title()
+            if "just a moment" in title.lower() or "security" in title.lower():
+                if progress_callback:
+                    progress_callback(self.name, "Waiting for security verification...")
+                await asyncio.sleep(1.5)
+            else:
+                break
+
+        # Locate prompt textarea with up to 15s wait
         input_selectors = [
             'div.ProseMirror',
             'fieldset div[contenteditable="true"]',
             'div[contenteditable="true"]',
+            'p[data-placeholder]',
             'div[data-placeholder*="Claude"]'
         ]
 
         target_input = None
-        for sel in input_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.is_visible(timeout=1500):
-                    target_input = loc
-                    break
-            except Exception:
-                continue
+        for _ in range(15):
+            for sel in input_selectors:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=500):
+                        target_input = loc
+                        break
+                except Exception:
+                    continue
+            if target_input:
+                break
+            await asyncio.sleep(1)
 
         if not target_input:
-            raise RuntimeError("Claude prompt input box not found. Please verify you are logged in.")
+            raise RuntimeError("Claude prompt input box not found. Please verify you are logged in and Cloudflare challenge is passed.")
 
         if progress_callback:
             progress_callback(self.name, "Typing prompt...")
@@ -102,17 +125,19 @@ class ClaudeProvider(BaseProvider):
 
         await asyncio.sleep(0.5)
 
-        if progress_callback:
-            progress_callback(self.name, "Submitting query...")
-
-        assistant_selector = '.font-claude-message, .standard-markdown, div[data-is-streaming], div.font-user-message ~ div'
+        # Count prior assistant messages
         prior_count = 0
         try:
-            prior_count = await page.locator(assistant_selector).count()
+            prior_count = await page.evaluate('''() => {
+                return document.querySelectorAll('.font-claude-message, [data-testid="chat-message-assistant"], .standard-markdown, [data-is-streaming]').length;
+            }''')
         except Exception:
             pass
 
-        send_btn = page.locator('button[aria-label="Send Message"], button[aria-label="Send prompt"], fieldset button:has(svg)').last
+        if progress_callback:
+            progress_callback(self.name, "Submitting query...")
+
+        send_btn = page.locator('button[aria-label*="Send" i], button[data-testid="send-button"], fieldset button:has(svg)').last
         sent = False
         try:
             if await send_btn.is_enabled(timeout=1000):
@@ -127,26 +152,33 @@ class ClaudeProvider(BaseProvider):
         if progress_callback:
             progress_callback(self.name, "Waiting for Claude to generate...")
 
-        # Wait for new assistant message to appear
+        # Wait for generation to start (up to 30s)
+        stop_selector = 'button[aria-label*="Stop" i], button:has-text("Stop responding")'
         for _ in range(30):
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
             try:
-                curr_count = await page.locator(assistant_selector).count()
-                if curr_count > prior_count:
+                curr_count = await page.evaluate('''() => {
+                    return document.querySelectorAll('.font-claude-message, [data-testid="chat-message-assistant"], .standard-markdown, [data-is-streaming]').length;
+                }''')
+                stop_btn = page.locator(stop_selector).first
+                if curr_count > prior_count or await stop_btn.is_visible(timeout=200):
                     break
             except Exception:
                 pass
 
         async def get_latest_response():
-            locators = page.locator(assistant_selector)
-            count = await locators.count()
-            if count > 0:
-                last_el = locators.nth(count - 1)
-                text = await last_el.inner_text()
-                return text
-            return ""
+            # Extract the actual assistant message body, stripping action toolbars (Copy/Retry buttons)
+            res = await page.evaluate('''() => {
+                const candidates = Array.from(document.querySelectorAll('.font-claude-message, [data-testid="chat-message-assistant"], .standard-markdown, [data-is-streaming]'));
+                if (candidates.length === 0) return "";
+                const last = candidates[candidates.length - 1];
+                const clone = last.cloneNode(true);
+                // Remove toolbar buttons and utility controls
+                clone.querySelectorAll('button, .flex.gap-2, .font-user-message').forEach(el => el.remove());
+                return clone.innerText.trim();
+            }''')
+            return res or ""
 
-        stop_selector = 'button[aria-label*="Stop"], button:has-text("Stop responding")'
         response = await self.wait_for_text_stabilization(
             page=page,
             get_text_fn=get_latest_response,

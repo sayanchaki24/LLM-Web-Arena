@@ -78,14 +78,18 @@ class ChatGPTProvider(BaseProvider):
         ]
 
         target_input = None
-        for sel in input_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.is_visible(timeout=1500):
-                    target_input = loc
-                    break
-            except Exception:
-                continue
+        for _ in range(15):
+            for sel in input_selectors:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=500):
+                        target_input = loc
+                        break
+                except Exception:
+                    continue
+            if target_input:
+                break
+            await asyncio.sleep(1)
 
         if not target_input:
             raise RuntimeError("ChatGPT prompt input box not found. Please verify you are logged in.")

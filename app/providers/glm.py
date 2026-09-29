@@ -38,26 +38,50 @@ class GLMProvider(BaseProvider):
             await asyncio.sleep(2)
             await self._dismiss_popups(page)
 
-            # Check if login/sign-in button is displayed prominently
+            # 1. Fast token payload check from localStorage
+            try:
+                user_info = await page.evaluate('''() => {
+                    try {
+                        const tok = localStorage.getItem("token");
+                        if (!tok) return null;
+                        const parts = tok.split(".");
+                        if (parts.length < 2) return null;
+                        const payload = JSON.parse(atob(parts[1]));
+                        return payload;
+                    } catch (e) {
+                        return null;
+                    }
+                }''')
+                if user_info and isinstance(user_info, dict):
+                    email = user_info.get("email", "")
+                    # Real registered accounts do not use guest-*@guest.com
+                    if email and not email.startswith("guest-") and "@guest." not in email:
+                        logger.info(f"GLM logged in with verified user token: {email}")
+                        return True
+            except Exception as e:
+                logger.debug(f"GLM token decode check: {e}")
+
+            # 2. Check if login/sign-in button is displayed prominently
             login_btn = page.locator(
-                'button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Login"), button:has-text("登录"), a[href*="login"], a[href*="signin"]'
+                'button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login"), button:has-text("登录"), a[href*="login"], a[href*="signin"], a[href*="auth"]'
             ).first
             is_login_visible = False
             try:
-                is_login_visible = await login_btn.is_visible(timeout=1000)
+                is_login_visible = await login_btn.is_visible(timeout=2000)
             except Exception:
                 pass
 
-            # Check if prompt input exists
+            # 3. Check if prompt input exists
             input_box = page.locator(
-                '#chat-input, textarea, div[contenteditable="true"]'
+                '#chat-input, textarea.input-scroll, textarea, div[contenteditable="true"]'
             ).first
             is_prompt_visible = False
             try:
-                is_prompt_visible = await input_box.is_visible(timeout=2000)
+                is_prompt_visible = await input_box.is_visible(timeout=6000)
             except Exception:
                 pass
 
+            logger.info(f"GLM check_login_status: url={page.url} is_prompt={is_prompt_visible} is_login_vis={is_login_visible}")
             return is_prompt_visible and not is_login_visible
         except Exception as e:
             logger.warning(f"Error checking GLM login: {e}")
@@ -76,25 +100,28 @@ class GLMProvider(BaseProvider):
         await asyncio.sleep(2)
         await self._dismiss_popups(page)
 
-        # Locate prompt textarea / input
+        # Locate prompt textarea / input with up to 15s wait
         input_selectors = [
             '#chat-input',
-            'textarea[placeholder*="Ask"]',
-            'textarea[placeholder*="chat"]',
+            'textarea.input-scroll',
             'textarea',
             'div[contenteditable="true"]#chat-input',
             'div[contenteditable="true"]'
         ]
 
         target_input = None
-        for sel in input_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.is_visible(timeout=1500):
-                    target_input = loc
-                    break
-            except Exception:
-                continue
+        for _ in range(15):
+            for sel in input_selectors:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=500):
+                        target_input = loc
+                        break
+                except Exception:
+                    continue
+            if target_input:
+                break
+            await asyncio.sleep(1)
 
         if not target_input:
             raise RuntimeError("GLM prompt input box not found. Please verify you are logged into https://chat.z.ai/.")
@@ -112,37 +139,30 @@ class GLMProvider(BaseProvider):
 
         await asyncio.sleep(0.5)
 
-        if progress_callback:
-            progress_callback(self.name, "Submitting query to GLM...")
-
         # Count prior assistant messages
-        assistant_selectors = [
-            '[data-message-author-role="assistant"]',
-            '.markdown',
-            '.assistant-message',
-            'div[class*="message"][class*="assistant"]',
-            'div[class*="chat-message"]:not([class*="user"])'
-        ]
-        
-        # Pick the active selector or fallback to .markdown
-        assistant_selector = '.markdown, [data-message-author-role="assistant"], div[class*="message"]:not([class*="user"])'
         prior_count = 0
         try:
-            prior_count = await page.locator(assistant_selector).count()
+            prior_count = await page.evaluate('''() => {
+                return document.querySelectorAll('div[class*="message-"]:not(.user-message):not([class*="messageInputContainer"]), .markdown').length;
+            }''')
         except Exception:
             pass
 
-        # Locate and click send button
+        if progress_callback:
+            progress_callback(self.name, "Submitting query to GLM...")
+
         send_selectors = [
+            '#send-message-button',
+            '.sendMessageButton',
+            'button[type="submit"]',
             'button[data-testid="send-button"]',
-            'button[aria-label*="Send"]',
-            'button[aria-label*="发送"]',
-            'button:has(svg):not([disabled])'
+            'button[aria-label*="Send" i]',
+            'button[aria-label*="发送"]'
         ]
         sent = False
         for send_sel in send_selectors:
             try:
-                btn = page.locator(send_sel).last
+                btn = page.locator(send_sel).first
                 if await btn.is_enabled(timeout=1000):
                     await btn.click()
                     sent = True
@@ -156,32 +176,59 @@ class GLMProvider(BaseProvider):
         if progress_callback:
             progress_callback(self.name, "Waiting for GLM to generate...")
 
-        # Wait for new message to appear
-        for _ in range(30):
-            await asyncio.sleep(0.5)
+        # Wait for generation to start (up to 35 seconds to allow Deep Think initialization)
+        for _ in range(35):
+            await asyncio.sleep(1)
             try:
-                curr_count = await page.locator(assistant_selector).count()
-                if curr_count > prior_count:
+                curr_count = await page.evaluate('''() => {
+                    return document.querySelectorAll('div[class*="message-"]:not(.user-message):not([class*="messageInputContainer"]), .markdown').length;
+                }''')
+                # If send button is disabled/replaced by stop icon, generation has started
+                stop_btn = page.locator('button[aria-label*="stop" i], button[aria-label*="停止"], .stop-btn').first
+                if curr_count > prior_count or await stop_btn.is_visible(timeout=200):
                     break
             except Exception:
                 pass
 
         async def get_latest_response():
-            locators = page.locator(assistant_selector)
-            count = await locators.count()
-            if count > 0:
-                last_el = locators.nth(count - 1)
-                text = await last_el.inner_text()
-                return text
+            # Robust extraction of assistant message excluding input container and user messages
+            res = await page.evaluate('''() => {
+                // Find all candidate message blocks that are NOT user messages and NOT the input container
+                const candidates = Array.from(document.querySelectorAll('div[class*="message-"]')).filter(
+                    d => !d.className.includes('user-message') && !d.className.includes('messageInputContainer')
+                );
+                if (candidates.length > 0) {
+                    const last = candidates[candidates.length - 1];
+                    const md = last.querySelector('.markdown') || last.querySelector('.prose');
+                    if (md && md.innerText.trim().length > 0) {
+                        return md.innerText.trim();
+                    }
+                    const text = last.innerText.trim();
+                    if (text.length > 0 && !text.includes('messageInputContainer')) {
+                        return text;
+                    }
+                }
+                const markdowns = Array.from(document.querySelectorAll('.markdown'));
+                if (markdowns.length > 0) {
+                    return markdowns[markdowns.length - 1].innerText.trim();
+                }
+                return "";
+            }''')
+            # Protect against capturing "Deep Think\nMax" or UI badge text
+            if res and len(res) > 0:
+                clean = res.strip()
+                if clean in ["Deep Think", "Deep Think\nMax", "Max"]:
+                    return ""
+                return clean
             return ""
 
-        stop_selector = 'button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="停止"]'
+        stop_selector = 'button[aria-label*="stop" i], button[aria-label*="停止"], .stop-btn'
         response = await self.wait_for_text_stabilization(
             page=page,
             get_text_fn=get_latest_response,
             stop_selector=stop_selector,
             timeout=140,
-            stabilize_seconds=3.0,
+            stabilize_seconds=3.5,
             progress_callback=progress_callback
         )
 

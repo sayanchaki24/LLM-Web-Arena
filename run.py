@@ -7,16 +7,6 @@ import uvicorn
 from app.config import settings
 from app.browser_manager import browser_manager
 
-def open_browser_tab(url: str, delay: float = 1.2):
-    async def _open():
-        await asyncio.sleep(delay)
-        webbrowser.open(url)
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(_open())
-    except Exception:
-        pass
-
 def main():
     parser = argparse.ArgumentParser(description="BestResponse - Multi-LLM Web Orchestrator & AI Judge")
     parser.add_argument("--login", action="store_true", help="Launch persistent browser window to log in to ChatGPT, Claude, and Gemini accounts")
@@ -64,21 +54,7 @@ def main():
         import threading
         threading.Timer(1.5, lambda: webbrowser.open(dashboard_url)).start()
 
-    if sys.platform == "win32":
-        # Handle WinError 10054 cleanly
-        def handle_async_exception(loop, context):
-            exc = context.get("exception")
-            if isinstance(exc, ConnectionResetError) and getattr(exc, "winerror", None) == 10054:
-                return
-            loop.default_exception_handler(context)
-
-        try:
-            loop = asyncio.get_event_loop()
-            loop.set_exception_handler(handle_async_exception)
-        except Exception:
-            pass
-
-    uvicorn.run("app.server:app", host=args.host, port=args.port, reload=False, log_level="info", ws="websockets")
+    uvicorn.run("app.server:app", host=args.host, port=args.port, reload=False, log_level="info", ws="auto")
 
 if __name__ == "__main__":
     main()

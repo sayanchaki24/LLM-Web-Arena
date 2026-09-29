@@ -47,6 +47,10 @@ class BrowserManager:
                     args=self._get_browser_args(),
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
                 )
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = { runtime: {} };
+                """)
                 self._login_context = context
 
                 # Open ChatGPT, Claude, Gemini tabs
@@ -60,7 +64,7 @@ class BrowserManager:
                 await page3.goto(settings.gemini_url)
 
                 page4 = await context.new_page()
-                await page4.goto(settings.glm_url)
+                await page4.goto("https://chat.z.ai/auth")
 
                 return {
                     "status": "success",
@@ -107,11 +111,15 @@ class BrowserManager:
             try:
                 context = await pw.chromium.launch_persistent_context(
                     user_data_dir=self.profile_dir,
-                    headless=True,
+                    headless=settings.headless,
                     ignore_default_args=["--enable-automation"],
                     args=self._get_browser_args(),
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
                 )
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = { runtime: {} };
+                """)
 
                 for name, provider in PROVIDERS.items():
                     try:
@@ -169,6 +177,10 @@ class BrowserManager:
                     args=self._get_browser_args(),
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
                 )
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = { runtime: {} };
+                """)
 
                 # Step 1: Create tasks for each selected model
                 tasks = []
@@ -241,13 +253,11 @@ class BrowserManager:
 
                     # Pick judge provider
                     judge_provider = active_providers.get(actual_judge)
-                    judge_page = pages_map.get(actual_judge)
 
                     # Fallback to any successful model if requested judge failed
                     if not judge_provider or actual_judge not in successful_responses:
                         actual_judge = list(successful_responses.keys())[0]
                         judge_provider = active_providers[actual_judge]
-                        judge_page = pages_map[actual_judge]
 
                     judge_prompt, mapping = build_judge_prompt(prompt, successful_responses)
 
@@ -255,12 +265,19 @@ class BrowserManager:
                         if progress_callback:
                             progress_callback("Judge", f"AI Judge ({actual_judge}) analyzing candidate answers...")
 
-                        # Send judging prompt
-                        judge_response = await judge_provider.send_prompt(
-                            judge_page,
-                            judge_prompt,
-                            progress_callback=lambda m, s: progress_callback("Judge", s) if progress_callback else None
-                        )
+                        # Open dedicated fresh page for judge to avoid conversation history/DOM collisions
+                        judge_page = await context.new_page()
+                        try:
+                            judge_response = await judge_provider.send_prompt(
+                                judge_page,
+                                judge_prompt,
+                                progress_callback=lambda m, s: progress_callback("Judge", s) if progress_callback else None
+                            )
+                        finally:
+                            try:
+                                await judge_page.close()
+                            except Exception:
+                                pass
 
                         verdict = parse_judge_verdict(judge_response, mapping)
                         winner = verdict["winner"]

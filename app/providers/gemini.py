@@ -46,7 +46,7 @@ class GeminiProvider(BaseProvider):
             prompt_editor = page.locator('rich-textarea div.ql-editor, div.ql-editor, div[contenteditable="true"]').first
             is_prompt_visible = False
             try:
-                is_prompt_visible = await prompt_editor.is_visible(timeout=2000)
+                is_prompt_visible = await prompt_editor.is_visible(timeout=6000)
             except Exception:
                 pass
 
@@ -68,24 +68,28 @@ class GeminiProvider(BaseProvider):
         await asyncio.sleep(2)
         await self._dismiss_popups(page)
 
-        # Locate prompt editor
+        # Locate prompt editor with up to 15s wait
         input_selectors = [
             'rich-textarea div.ql-editor',
             'div.ql-editor[contenteditable="true"]',
-            'div[contenteditable="true"][data-placeholder]',
             'rich-textarea',
+            'div[contenteditable="true"][data-placeholder]',
             'div[contenteditable="true"]'
         ]
 
         target_input = None
-        for sel in input_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.is_visible(timeout=1500):
-                    target_input = loc
-                    break
-            except Exception:
-                continue
+        for _ in range(15):
+            for sel in input_selectors:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=500):
+                        target_input = loc
+                        break
+                except Exception:
+                    continue
+            if target_input:
+                break
+            await asyncio.sleep(1)
 
         if not target_input:
             raise RuntimeError("Gemini prompt input box not found. Please verify you are logged into your Google account.")
@@ -103,24 +107,31 @@ class GeminiProvider(BaseProvider):
 
         await asyncio.sleep(0.5)
 
+        # Count prior assistant messages
+        prior_count = 0
+        try:
+            prior_count = await page.locator('message-content').count()
+        except Exception:
+            pass
+
         if progress_callback:
             progress_callback(self.name, "Submitting query...")
 
-        assistant_selector = 'model-response, message-content, .model-response-text, div.markdown'
-        prior_count = 0
-        try:
-            prior_count = await page.locator(assistant_selector).count()
-        except Exception:
-            pass
-
-        send_btn = page.locator('button.send-button, button[aria-label*="Send message"], button[aria-label="Submit"]').first
+        send_selectors = [
+            'button[aria-label*="Send message" i]',
+            'button.send-button',
+            'button[aria-label="Submit" i]'
+        ]
         sent = False
-        try:
-            if await send_btn.is_enabled(timeout=1000):
-                await send_btn.click()
-                sent = True
-        except Exception:
-            pass
+        for send_sel in send_selectors:
+            try:
+                btn = page.locator(send_sel).first
+                if await btn.is_enabled(timeout=1000):
+                    await btn.click()
+                    sent = True
+                    break
+            except Exception:
+                continue
 
         if not sent:
             await page.keyboard.press("Enter")
@@ -128,26 +139,39 @@ class GeminiProvider(BaseProvider):
         if progress_callback:
             progress_callback(self.name, "Waiting for Gemini to generate...")
 
-        # Wait for new assistant message to appear
-        for _ in range(30):
-            await asyncio.sleep(0.5)
+        # Wait for generation to start (up to 35 seconds)
+        stop_selector = 'button[aria-label*="Stop response" i], button[aria-label*="Stop generating" i], button[aria-label*="Stop" i]'
+        for _ in range(35):
+            await asyncio.sleep(1)
             try:
-                curr_count = await page.locator(assistant_selector).count()
-                if curr_count > prior_count:
+                curr_count = await page.locator('message-content').count()
+                stop_btn = page.locator(stop_selector).first
+                is_generating = await stop_btn.is_visible(timeout=300)
+                if curr_count > prior_count or is_generating:
                     break
             except Exception:
                 pass
 
         async def get_latest_response():
-            locators = page.locator(assistant_selector)
+            # Query message-content directly so full markdown text is retrieved
+            locators = page.locator('message-content')
             count = await locators.count()
             if count > 0:
-                last_el = locators.nth(count - 1)
-                text = await last_el.inner_text()
-                return text
+                text = await locators.nth(count - 1).inner_text()
+                if text and len(text.strip()) > 0:
+                    return text.strip()
+
+            # Fallback to model-response
+            mr_locators = page.locator('model-response')
+            mr_count = await mr_locators.count()
+            if mr_count > 0:
+                mr_text = await mr_locators.nth(mr_count - 1).inner_text()
+                if mr_text.startswith("Gemini said"):
+                    mr_text = mr_text.replace("Gemini said", "", 1).strip()
+                return mr_text.strip()
+
             return ""
 
-        stop_selector = 'button[aria-label*="Stop response"], button[aria-label*="Stop generating"]'
         response = await self.wait_for_text_stabilization(
             page=page,
             get_text_fn=get_latest_response,

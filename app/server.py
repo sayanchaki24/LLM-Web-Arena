@@ -9,6 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+import sys
+from contextlib import asynccontextmanager
+
 from app.config import settings
 from app.browser_manager import browser_manager
 from app.database import init_db, get_history, get_query_by_id
@@ -19,7 +22,22 @@ logger = logging.getLogger("bestresponse")
 # Initialize database
 init_db()
 
-app = FastAPI(title=settings.app_name)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if sys.platform == "win32":
+        try:
+            loop = asyncio.get_running_loop()
+            def handle_async_exception(loop, context):
+                exc = context.get("exception")
+                if isinstance(exc, ConnectionResetError) and getattr(exc, "winerror", None) == 10054:
+                    return
+                loop.default_exception_handler(context)
+            loop.set_exception_handler(handle_async_exception)
+        except Exception as e:
+            logger.debug(f"Failed to set Windows loop exception handler: {e}")
+    yield
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
